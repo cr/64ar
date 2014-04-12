@@ -1,0 +1,248 @@
+#!/usr/bin/env python
+# (c) 2014 Christiane Ruetten, cr at 23bit net
+# licensed under GPLv3
+version = "0.1"
+
+
+# t64 file format, see http://unusedino.de/ec64/technical/formats/t64.html
+
+import sys
+import os
+from struct import pack,unpack
+
+class T64Image( object ):
+	"""Holds a T64 image object.
+	"""
+
+	signatures = ["C64 tape image file", "C64 tape file", "C64S tape image file", "C64S tape image file"]
+	
+	def __init__( self, rawdata=None ):
+		"""
+		Creates a T64 image object.
+		Optional parameter is parsed as raw t64 image data.
+		Without parameter, an empty image object is created.
+		"""
+
+		self.signature = self.signatures[0]
+		self.version = 0x100
+		self.dirname = "EMPTY TAPE"
+		self.files = []
+
+		if rawdata is not None:
+			self.parse( rawdata )
+
+	def parse( self, rawdata ):
+		"""
+		Parses raw data string as T64 object.
+		"""
+		# Image header
+		p = 0x00
+		self.signature = self.unpad( rawdata[p:p+32], '\x00' )
+		
+		# Directory Header
+		p = 0x20
+		self.version, direntriesmax, direntriesused, unused = unpack( "<HHHH", rawdata[p:p+8] )
+		self.dirname = self.unpad( rawdata[p+8:p+32], '\x20' )
+		self.files = [None]*direntriesmax
+		numfiles = 0
+		for i in xrange( direntriesmax ):
+			p = 0x40 + 32*i
+			dirtype, filetype, startaddr, endaddr, unused, offset, unused = unpack( "<BBHHHLL", rawdata[p:p+16] )
+			if dirtype == 0:
+				pass
+			if dirtype == 1:
+				name = self.unpad( rawdata[p+16:p+32], '\x20' )
+				self.files[i] = { "dirtype":dirtype, "filetype":filetype, "startaddr":startaddr, "endaddr":endaddr, "name":name, "offset":offset }
+				numfiles += 1
+			if dirtype == 3:
+				sys.stderr.write( "WARNING: dir entry %i has unsupported type %i\n" % (i,dirtype) )
+
+		if len( self.files ) != direntriesmax: # should never happen
+			sys.stderr.write( "WARNING: incorrect number of dir entries in header: %i should be %i. FIXED\n" % (direntriesmax,len(self.files)) )
+		if numfiles != direntriesused:
+			sys.stderr.write( "WARNING: number of files does not match header info: %i, should be %i. FIXED\n" % (direntriesused,numfiles) )
+
+		# workaround for broken T64 files is to not rely on start and end addresses, but on offsets
+		# files with endaddr == 0xc3c6 are probably broken
+
+		offsets = []
+		files = {}
+		for f in self.files:
+			if f is not None:
+				offsets.append( f["offset"] )
+				files[ f["offset"] ] = f
+
+		offsets.sort()
+		offsets.append( len(rawdata) )
+		assert len(offsets) > 1
+
+		for i in xrange( len(offsets)-1 ):
+			offset = offsets[i]
+			f = files[offset]
+			lengthbyoffset = offsets[i+1] - offset
+			lengthbyaddress = f["endaddr"] - f["startaddr"] # 2-byte load address is stored in header, but will be part of extracted file
+			if lengthbyoffset == lengthbyaddress:
+				f["data"] = rawdata[offset:offset + lengthbyaddress]
+				f.pop("offset", None)
+			else:
+				sys.stderr.write( "WARNING: wrong length %i in header, should be %i. FIXED\n" % (lengthbyaddress,lengthbyoffset) )
+				f["data"] = rawdata[offset:offset + lengthbyoffset]
+				f.pop("offset", None)
+
+	def __getitem__( self, i ):
+		return self.files[i]
+
+	def __setitem__( self, i, v ):
+		self.files[i] = v
+
+	def load( self, filename ):
+		"""
+		Parses specified file as T64 image data.
+		"""
+		if filename == "-":
+			self.parse( sys.stdin.read() )
+		else:
+			with open( filename, 'rb' ) as f:
+				self.parse( f.read() )
+
+	def save( self, filename ):
+		"""
+		Saves T64 image to file.
+		"""
+		if filename == "-":
+			sys.stdin.write( self.dump )
+		else:
+			with open( filename, 'wb' ) as f: 
+				f.write( self.dump() )
+
+	def pad( self, s, pad, l ):
+		assert len( pad ) == 1
+		if len(s) > l:
+			s = s[:l] # truncate too long strings
+		return s + pad*(l-len(s))	
+
+	def unpad( self, s, pad ):
+		assert len( pad ) == 1
+		while s.endswith( pad ):
+			s = s[:-1]
+		return s
+
+	def info( self ):
+		print "signature:", repr( self.signature )
+		print "version: %x" % self.version
+		print "dir entries:", len( self.files )
+		print "name:", repr( self.dirname )
+
+	def dir( self ):
+		for i in xrange(len( self.files )):
+			if self.files[i] is not None:
+				p = self.files[i]
+				print " %2i: d:%02x t:%02x s:$%04x l:$%04x	%s" % (i, p["dirtype"], p["filetype"], p["startaddr"], p["endaddr"]-p["startaddr"], repr(p["name"]))
+
+	def cleanup( self ):
+		self.signature = self.signatures[0]
+		self.version = 0x100
+
+		cleanfiles = []
+		for f in self.files:
+			if f is not None:
+				cleanfiles.append( f )
+		self.files = cleanfiles
+
+		# sanitize start and and addresses
+		for f in self.files:
+			f["endaddr"] = f["startaddr"] + len(f["data"])
+
+
+	def dump( self ):
+
+		# calculate correct numbers for directory header
+		direntriesmax = len(self.files)
+		direntriesused = 0
+		for f in self.files:
+			if f is not None:
+				direntriesused += 1
+
+		headerdata = self.pad( self.signature, '\x00', 32 )
+		headerdata += pack( "<HHHH", self.version, direntriesmax, direntriesused, 0 )
+		headerdata += self.pad( self.dirname, '\x20', 24 )
+
+		dirsize = 32 * len(self.files)
+		dirdata = ""
+		filedata = ""
+		for f in self.files:
+			if f is not None:
+				offset = len(headerdata) + dirsize + len(filedata)
+				dirdata += pack( "<BBHHHLL", f["dirtype"], f["filetype"], f["startaddr"], f["endaddr"], 0, offset, 0 )
+				dirdata += self.pad( f["name"], ' ', 16 ) # pad takes care of too long names
+				filedata += f["data"]
+			else:
+				dirdata += '\x00' * 32
+
+		image = headerdata + dirdata + filedata
+		return image
+
+###################################################################################################
+# main
+
+def main():
+	from optparse import OptionParser
+
+	usage = "usage: %prog [options] command [<input filename> [<output filename>]]"
+	parser = OptionParser( usage=usage, version="%prog "+version )
+	parser.add_option( "-c", "--cleanup", action="store_true", dest="cleanup", default=False,
+			help="decrypt input to output" )
+	(opt, args) = parser.parse_args()
+
+	try:
+		cmd = args[0]
+	except IndexError:
+		sys.stderr.write( 'ERROR: no command given\n' )
+		sys.exit( -5 )
+
+	try:
+		infile = args[1]
+	except IndexError:
+		infile = "-"
+
+	try:
+		outfile = args[2]
+	except IndexError:
+		outfile = "-"
+
+	if cmd == "info":
+		t = T64Image()
+		if infile:
+			t.load( infile )
+			t.info()
+			t.dir()
+
+	elif cmd == "dir":
+		t = T64Image()
+		if infile:
+			t.load( infile )
+			t.dir()
+
+	elif cmd == "edit":
+		t = T64Image()
+		if infile:
+			t.load( infile )
+			t.info()
+			t.dir()
+
+		from IPython.terminal.embed import InteractiveShellEmbed
+		ipshell = InteractiveShellEmbed( banner1="ready. type ?t for usage info", exit_msg="bye." )
+		ipshell()
+
+	elif cmd == "cleanup":
+		t = T64Image()
+		t.load( infile )
+		t.cleanup()
+		t.save( outfile )
+
+	else:
+		sys.stderr.write( 'ERROR: unknown command %s\n' % cmd )
+		sys.exit( -5 )
+
+if __name__ == '__main__':
+	main()
