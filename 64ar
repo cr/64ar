@@ -43,6 +43,22 @@ class T64File( object ):
 			sys.stderr.write( "WARNING: unsupported dir entry type %i. Creating empty entry.\n" % repr(self.direntrytype) )
 			return '\x00' * 32
 
+	def filename( self, pos=0 ):
+		if self.direntrytype == 0:
+			return "<empty>"
+		if self.filetype == 0x80:   # DEL
+			ext = ".D%02d" % pos
+		elif self.filetype == 0x81: # SEQ
+			ext = ".S%02d" % pos
+		elif self.filetype == 0x82: # PRG
+			ext = ".P%02d" % pos
+		elif self.filetype == 0x83: # USR
+			ext = ".U%02d" % pos
+		elif self.filetype == 0x81: # REL
+			ext = ".R%02d" % pos
+		else:
+			ext = ".P%02d" % pos    # fallback for malformed archives
+		return self.name + ext
 
 class T64Image( object ):
 	"""Holds a T64 image object.
@@ -148,21 +164,25 @@ class T64Image( object ):
 		"""
 		Parses specified file as T64 image data.
 		"""
-		if filename == "-":
+		if isinstance( filename, file ):
 			self.parse( sys.stdin.read() )
-		else:
+		elif isinstance( filename, str ):
 			with open( filename, 'rb' ) as f:
 				self.parse( f.read() )
+		else:
+			raise Exception( "object %s is not readable" % repr(filename) )
 
 	def save( self, filename ):
 		"""
 		Saves T64 image to file.
 		"""
-		if filename == "-":
-			sys.stdout.write( self.dump )
-		else:
+		if isinstance( filename, file ):
+			filename.write( self.dump )
+		elif isinstance( filename, str ):
 			with open( filename, 'wb' ) as f: 
 				f.write( self.dump() )
+		else:
+			raise Exception( "object %s is not writable" % repr( filename ) )
 
 	def pad( self, s, pad, l ):
 		assert len( pad ) == 1
@@ -177,17 +197,27 @@ class T64Image( object ):
 		return s
 
 	def info( self ):
-		print "signature:", repr( self.signature )
-		print "version: %x" % self.version
-		print "tape name:", repr( self.name )
-		print "dir entries:", len( self.files )
+		print "#tape name:   %s" % repr( self.name )
+		print "#signature:   %s" % repr( self.signature )
+		print "#version:     %x" % self.version
+		print "#dir entries: %s" % len( self.files )
 
-	def dir( self ):
+	def dir( self, verbose=False, pos=False ):
+		if verbose:
+			self.info()
 		for i in xrange(len( self.files )):
 			p = self.files[i]
 			if p is not None:
 				if p.direntrytype != 0:
-					print " %2i: d:%02x t:%02x s:$%04x l:$%04x	%s" % (i, p.direntrytype, p.filetype, p.startaddr, len(p.data), repr(p.name))
+					if verbose:
+						s = "%3i:%02x  $%04x/$%04x %8d " % (i, p.filetype, p.startaddr, p.startaddr+len(p.data), len(p.data) )
+					else:
+						s = ""
+					if pos:
+						s += self.name + "/" + p.filename( pos=i )
+					else:
+						s += self.name + "/" + p.filename()
+					print s
 
 	def cleanup( self ):
 		self.signature = self.signatures[0]
@@ -233,64 +263,90 @@ class T64Image( object ):
 def main():
 	from optparse import OptionParser
 
-	usage = "usage: %prog [options] command [<input filename> [<output filename>]]"
+	usage = "usage: %prog {-x | -c | -t | -E | -R} [options] [-f <archive>] [<files>...]"
 	parser = OptionParser( usage=usage, version="%prog "+version )
-	parser.add_option( "-c", "--cleanup", action="store_true", dest="cleanup", default=False,
-			help="decrypt input to output" )
+	parser.add_option( "-x", "--extract", action="store_true", dest="extract", default=False, help="extract files from an archive" )
+	parser.add_option( "-c", "--create", action="store_true", dest="create", default=False, help="create a new archive" )
+	parser.add_option( "-t", "--list", action="store_true", dest="list", default=False, help="list the contents of an archive" )
+	parser.add_option( "-E", "--edit", action="store_true", dest="edit", default=False, help="edit an archive interactively" )
+	parser.add_option( "-R", "--repair", action="store_true", dest="repair", default=False, help="repair a malformed archive" )
+	parser.add_option( "-p", "--position", action="store_true", dest="keep_position", default=False, help="encode position in file names" )
+	parser.add_option( "-v", "--verbose", action="store_true", dest="verbose", default=False, help="verbose operation" )
+	parser.add_option( "-q", "--quiet", action="store_true", dest="quiet", default=False, help="suppress warnings" )
+	parser.add_option( "-f", "--file", dest="filename", help="verbose operation" )
+
+	# support old-style "tvf" tar arguments
+	if len(sys.argv)>1 and not sys.argv[1].startswith( '-' ):
+		sys.argv[1] = '-' + sys.argv[1]
 	(opt, args) = parser.parse_args()
 
-	try:
-		cmd = args[0]
-	except IndexError:
-		sys.stderr.write( 'ERROR: no command given\n' )
-		sys.exit( -5 )
-
-	try:
-		infile = args[1]
-	except IndexError:
-		infile = "-"
-
-	try:
-		outfile = args[2]
-	except IndexError:
-		outfile = infile
-
-	if cmd == "info":
+	##############################################################################
+	if opt.list:
 		t = T64Image()
-		if infile:
-			t.load( infile )
-			if opt.cleanup:
+		if opt.filename:
+			t.load( opt.filename )
+		else:
+			t.load( sys.stdin )
+		t.dir( verbose=opt.verbose, pos=opt.keep_position )
+
+	##############################################################################
+	elif opt.extract:
+		t = T64Image()
+		if opt.filename:
+			t.load( opt.filename )
+		else:
+			t.load( sys.stdin )
+		if opt.repair:
+			t.cleanup()
+		print "ERROR: extraction not implemented"
+
+	##############################################################################
+	elif opt.create:
+		t = T64Image()
+		print "ERROR: archive creation not implemented"
+
+	##############################################################################
+	elif opt.edit:
+		t = T64Image()
+		if not opt.filename:
+			sys.stderr.write( "ERROR: edit mode requires file argument" )
+		else:
+			t.load( opt.filename )
+			if opt.repair:
 				t.cleanup()
-			t.info()
-			t.dir()
 
-	elif cmd == "dir":
+			print "Welcome to the 64ar interactive python shell."
+			print "The archive is as the t object."
+			print "Type ?t for usage info."
+			print
+			t.dir( verbose=True )
+			print
+
+			from IPython.terminal.embed import InteractiveShellEmbed
+			ipshell = InteractiveShellEmbed( banner1="ready.", exit_msg="bye." )
+			ipshell()
+
+			print "Do you want to save changes ([y]/n)?",
+			l = sys.stdin.readline()
+			if l == "y" or l == "":
+				t.save( opt.filename )
+			print
+
+	##############################################################################
+	elif opt.repair:
 		t = T64Image()
-		if infile:
-			t.load( infile )
-			t.dir()
+		if opt.filename:
+			t.load( opt.filename )
+			t.cleanup()
+			t.save( opt.filename )
+		else:
+			t.load( sys.stdin )
+			t.cleanup()
+			t.save( sys.stdout )
 
-	elif cmd == "edit":
-		t = T64Image()
-		if infile:
-			t.load( infile )
-			if opt.cleanup:
-				t.cleanup()
-			t.info()
-			t.dir()
-
-		from IPython.terminal.embed import InteractiveShellEmbed
-		ipshell = InteractiveShellEmbed( banner1="ready. type ?t for usage info", exit_msg="bye." )
-		ipshell()
-
-	elif cmd == "cleanup":
-		t = T64Image()
-		t.load( infile )
-		t.cleanup()
-		t.save( outfile )
-
+	##############################################################################
 	else:
-		sys.stderr.write( 'ERROR: unknown command %s\n' % cmd )
+		sys.stderr.write( 'ERROR: you must specify a valid command\n' )
 		sys.exit( -5 )
 
 if __name__ == '__main__':
