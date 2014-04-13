@@ -457,7 +457,7 @@ def main():
 				t.cleanup()
 
 			print "Welcome to the 64ar interactive python shell."
-			print "The archive is as the t object."
+			print "The archive is loaded as the object t."
 			print "Type ?t for usage info."
 			print
 			t.dir( verbose=True )
