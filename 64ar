@@ -294,7 +294,7 @@ class T64Image( object ):
 		for f in self.files:
 			if f is not None:
 				offset = len(headerdata) + dirsize + len(filedata)
-				dirdata = f.direntry( offset )
+				dirdata += f.direntry( offset )
 				filedata += f.data
 			else:
 				dirdata += '\x00' * 32
