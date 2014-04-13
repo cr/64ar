@@ -3,7 +3,7 @@
 
 tar-style command for handling C64-specific files. So far only t64 archives are supported.
 
-## Warnig
+## Warning
 
 This is experimental code and most likely unfit for your purposes. It might accidentally delete all your data, or worse. Make a backup!
 
