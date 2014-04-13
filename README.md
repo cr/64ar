@@ -11,10 +11,10 @@ This tool does not support CC64S freeze files (.FRZ).
 
 ## Usage
 ``` bash
-$ ./64ar vt wizball.t64    # list content
+$ ./64ar vtf wizball.t64    # list content
 $ cat bumpingbuggies.t64 | ./64ar xP    # extract content, try to preserve file order
 $ ./64ar c ANTIRIAD/ >antiriad.t64    # create T64 of all files in directory
 $ ./64ar -Rf brucelee.t64    # fix malformed archive
-$ ./64ar E paradroid.t64    # interactively edit archive
+$ ./64ar Ef paradroid.t64    # interactively edit archive
 $ ./64ar --help
 ```
