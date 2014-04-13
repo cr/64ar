@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # (c) 2014 Christiane Ruetten, cr at 23bit net
-# licensed under GPLv3
+# published under MIT license
 version = "0.1"
 
 
