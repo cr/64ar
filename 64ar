@@ -13,15 +13,15 @@ from struct import pack,unpack
 
 
 class T64File( object ):
-	def __init__( self, data=None ):
+	def __init__( self, src=None ):
 		self.direntrytype = 0
 		self.filetype = 0
 		self.startaddr = 0
 		self.name = ""
 		self.data = ""
 
-		if data is not None:
-			self.parse( data )
+		if src is not None:
+			self.load( src )
 
 	def load( self, src=None ):
 		if isinstance( src, file ):
@@ -46,13 +46,16 @@ class T64File( object ):
 		# unpad filename
 		while filename.endswith('\x00'):
 			filename = filename[:-1]
+		self.name = filename
 
 		# TODO: determine file type from name
 		sys.stderr.write( "WARNING: defaulting to file type $82 (PRG)\n" )
 		self.filetype = 0x82
+		self.direntrytype = 1
 
 		# rest must be the data
 		self.data = data[28:]
+
 
 	def save( self, dst=None ):
 		filename = self.paddedname( '\x00' )
@@ -87,6 +90,7 @@ class T64File( object ):
 			return '\x00' * 32
 
 	def filename( self, pos=0 ):
+		pos = int( pos )
 		if self.direntrytype == 0:
 			return "<empty>"
 		if self.filetype == 0x80:   # DEL
@@ -221,7 +225,7 @@ class T64Image( object ):
 		Saves T64 image to file.
 		"""
 		if isinstance( filename, file ):
-			filename.write( self.dump )
+			filename.write( self.dump() )
 		elif isinstance( filename, str ):
 			with open( filename, 'wb' ) as f: 
 				f.write( self.dump() )
@@ -258,9 +262,9 @@ class T64Image( object ):
 					else:
 						s = ""
 					if pos:
-						s += self.name + "/" + p.filename( pos=i )
+						s += self.name + os.path.sep + p.filename( pos=i )
 					else:
-						s += self.name + "/" + p.filename()
+						s += self.name + os.path.sep + p.filename()
 					print s
 
 	def cleanup( self ):
@@ -308,14 +312,14 @@ class T64Image( object ):
 def main():
 	from optparse import OptionParser
 
-	usage = "usage: %prog {-x | -c | -t | -E | -R} [options] [-f <archive>] [<files>...]"
+	usage = "usage: %prog {-x | -c <dir>| -t | -E | -R} [options] [-f <archive>]"
 	parser = OptionParser( usage=usage, version="%prog "+version )
 	parser.add_option( "-x", "--extract", action="store_true", dest="extract", default=False, help="extract files from an archive" )
 	parser.add_option( "-c", "--create", action="store_true", dest="create", default=False, help="create a new archive" )
 	parser.add_option( "-t", "--list", action="store_true", dest="list", default=False, help="list the contents of an archive" )
 	parser.add_option( "-E", "--edit", action="store_true", dest="edit", default=False, help="edit an archive interactively" )
 	parser.add_option( "-R", "--repair", action="store_true", dest="repair", default=False, help="repair a malformed archive" )
-	parser.add_option( "-p", "--position", action="store_true", dest="keep_position", default=False, help="encode position in file names" )
+	parser.add_option( "-P", "--position", action="store_true", dest="keep_position", default=False, help="encode position in file names" )
 	parser.add_option( "-v", "--verbose", action="store_true", dest="verbose", default=False, help="verbose operation" )
 	parser.add_option( "-q", "--quiet", action="store_true", dest="quiet", default=False, help="suppress warnings" )
 	parser.add_option( "-f", "--file", dest="filename", help="verbose operation" )
@@ -345,12 +349,80 @@ def main():
 			t.load( sys.stdin )
 		if opt.repair:
 			t.cleanup()
-		print "ERROR: extraction not implemented"
+
+		if os.path.exists( t.name ):
+			if not os.path.isdir( t.name ):
+				sys.stderr.write( "ERROR: %s already exists, but is not a directory\n" % t.name )
+				sys.exit( -5 )
+		else:
+			os.mkdir( t.name, 0755 )
+
+		os.chdir( t.name )
+		for i in xrange( len( t.files ) ):
+			f = t.files[i]
+			if opt.keep_position:
+				filename = f.filename( pos=i )
+			else:
+				filename = f.filename()
+			if opt.verbose:
+				print t.name + os.path.sep + filename
+			f.save( filename )
+
 
 	##############################################################################
 	elif opt.create:
 		t = T64Image()
-		print "ERROR: archive creation not implemented"
+
+		if len( args ) < 1:
+			sys.stderr.write( "ERROR: no directory given\n" )
+			sys.exit( -5 )
+
+		if len( args ) > 1:
+			sys.stderr.write( "WARNING: ignoring extra arguments\n" )			
+
+		if not os.path.isdir( args[0] ):
+			sys.stderr.write( "ERROR: %s is not a directory\n" )
+			sys.exit( -5 )
+
+		dirname = args[0]
+		while dirname.endswith( os.path.sep ):
+			dirname = dirname[:-1]
+		t.name = os.path.basename( dirname ) #TODO: sanitize/recode name
+
+		oldpwd = os.getcwd()
+		os.chdir( dirname )
+		allfiles = [x for x in os.walk('.')][0][2]
+		cbmfiles = []
+		for filename in allfiles:
+			ext = os.path.splitext( filename )[1]
+			if len(ext) != 4:
+				continue
+			typechar = ext[1]
+			try:
+				pos = int(ext[2:])
+			except ValueError:
+				continue
+			finally:
+				cbmfiles.append( (filename, pos) )
+
+		if opt.keep_position:
+			cbmfiles.sort( key=lambda x: x[1] )
+
+		for x in cbmfiles:
+			f = T64File( x[0] )
+			t.files.append( f )
+			if opt.verbose:
+				sys.stderr.write( "%s\n" % x[0] )
+
+		if opt.repair:
+			t.cleanup()
+
+		if opt.filename:
+			os.chdir( oldpwd )
+			t.save( opt.filename )
+		else:
+			t.save( sys.stdout )
+
 
 	##############################################################################
 	elif opt.edit:
