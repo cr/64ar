@@ -35,7 +35,17 @@ from struct import pack,unpack
 
 
 class T64File( object ):
+	"""
+	Class to hold T64 file objects.
+	If source is given, it is passed to the .load() function.
+	"""
+
 	def __init__( self, src=None ):
+		"""
+		Constructor for C64 file objects.
+		If src is given, it is passed to the .load() function.
+		Else an empty object is created.
+		"""
 		self.direntrytype = 0
 		self.filetype = 0
 		self.startaddr = 0
@@ -46,6 +56,10 @@ class T64File( object ):
 			self.load( src )
 
 	def load( self, src=None ):
+		"""
+		Retrieves and parses src as PC64 image file.
+		src can be the name of an existing file, afile object, or a string.
+		"""		
 		if isinstance( src, file ):
 			data = file.read()
 		elif isinstance( src, str ):
@@ -80,6 +94,11 @@ class T64File( object ):
 
 
 	def save( self, dst=None ):
+		"""
+		Saves file in PC64 format to dst.
+		dst can be a string designating a file name, or a file object.
+		When dst is omitted, data is returned as a string.
+		"""
 		filename = self.paddedname( '\x00' )
 		relsize = 0
 		s = pack( "<7sB16sBBH", "C64File", 0, filename, 0, relsize, self.startaddr )
@@ -93,6 +112,9 @@ class T64File( object ):
 			return s
 
 	def paddedname( self, pad=' ' ):
+		"""
+		Internal padding function
+		"""
 		s = self.name
 		if len( s ) > 16:
 			s = s[:16] # truncate too long name
@@ -100,6 +122,9 @@ class T64File( object ):
 		return s + pad * (16-len(s))
 
 	def direntry( self , offset ):
+		"""
+		Internal function for generating a T64 directory entry.
+		"""
 		if self.direntrytype == 0:
 			return '\x00' * 32
 		elif self.direntrytype == 1:
@@ -112,6 +137,10 @@ class T64File( object ):
 			return '\x00' * 32
 
 	def filename( self, pos=0 ):
+		"""
+		Returns file name of object as it would be written to the file system.
+		If pos is given, it will be used as number in the extension, else the number will be 0.
+		"""
 		pos = int( pos )
 		if self.direntrytype == 0:
 			return "<empty>"
@@ -131,7 +160,8 @@ class T64File( object ):
 
 
 class T64Image( object ):
-	"""Holds a T64 image object.
+	"""
+	Holds a T64 image object.
 	"""
 
 	signatures = ["C64 tape image file", "C64 tape file", "C64S tape image file", "C64S tape image file"]
@@ -139,8 +169,8 @@ class T64Image( object ):
 	def __init__( self, rawdata=None ):
 		"""
 		Creates a T64 image object.
-		Optional parameter is parsed as raw t64 image data.
-		Without parameter, an empty image object is created.
+		Optional parameter is parsed as raw T64 image data.
+		Without parameter, an empty T64 object is created.
 		"""
 
 		self.signature = self.signatures[0]
@@ -153,8 +183,9 @@ class T64Image( object ):
 
 	def parse( self, rawdata ):
 		"""
-		Parses raw data string as T64 object.
+		Parses raw data string as T64 image data into this object.
 		"""
+
 		# Image header
 		p = 0x00
 		self.signature = self.unpad( rawdata[p:p+32], '\x00' )
@@ -225,14 +256,21 @@ class T64Image( object ):
 				self.files.append( n )
 
 	def __getitem__( self, i ):
+		"""
+		Convenience getter to support indexing of file objects.
+		"""
 		return self.files[i]
 
 	def __setitem__( self, i, v ):
+		"""
+		Convenience setter to support indexing of file objects.
+		"""
 		self.files[i] = v
 
 	def load( self, filename ):
 		"""
 		Parses specified file as T64 image data.
+		Parameter can be a file object, or a file name.
 		"""
 		if isinstance( filename, file ):
 			self.parse( sys.stdin.read() )
@@ -245,6 +283,7 @@ class T64Image( object ):
 	def save( self, filename ):
 		"""
 		Saves T64 image to file.
+		Parameter can be a file object, or a file name.
 		"""
 		if isinstance( filename, file ):
 			filename.write( self.dump() )
@@ -255,24 +294,40 @@ class T64Image( object ):
 			raise Exception( "object %s is not writable" % repr( filename ) )
 
 	def pad( self, s, pad, l ):
+		"""
+		Internal padding function.
+		"""
 		assert len( pad ) == 1
 		if len(s) > l:
 			s = s[:l] # truncate too long strings
 		return s + pad*(l-len(s))	
 
 	def unpad( self, s, pad ):
+		"""
+		Internal unpadding function.
+		"""
 		assert len( pad ) == 1
 		while s.endswith( pad ):
 			s = s[:-1]
 		return s
 
 	def info( self ):
+		"""
+		Prints archive meta data to stdout.
+		"""
 		print "#tape name:   %s" % repr( self.name )
 		print "#signature:   %s" % repr( self.signature )
 		print "#version:     %x" % self.version
 		print "#dir entries: %s" % len( self.files )
 
 	def dir( self, verbose=False, pos=False ):
+		"""
+		Prints archive listing to stdout.
+		When pos is True, file exten numbering is incrementend to
+		indicate positional order with in archive directory.
+		verbose adds information in the format:
+		directory_index:filetype  start_address/end_address  file_length
+		"""
 		if verbose:
 			self.info()
 		for i in xrange(len( self.files )):
@@ -290,6 +345,11 @@ class T64Image( object ):
 					print s
 
 	def cleanup( self ):
+		"""
+		Fix malformed archive and delete empty directory slots.
+		"""
+
+		# TODO: also fix file types
 		self.signature = self.signatures[0]
 		self.version = 0x100
 
@@ -301,7 +361,9 @@ class T64Image( object ):
 		self.files = cleanfiles
 
 	def dump( self ):
-
+		"""
+		Return T64 object as string in T64 image format.
+		"""
 		# calculate correct numbers for directory header
 		direntriesmax = len(self.files)
 		direntriesused = 0
@@ -458,7 +520,7 @@ def main():
 
 			print "Welcome to the 64ar interactive python shell."
 			print "The archive is loaded as the object t."
-			print "Type ?t for usage info."
+			print "Type help(t) and help(T64File) for usage info."
 			print
 			t.dir( verbose=True )
 			print
