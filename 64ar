@@ -5,6 +5,7 @@ version = "0.1"
 
 
 # t64 file format, see http://unusedino.de/ec64/technical/formats/t64.html
+# pc64 file format, see http://unusedino.de/ec64/technical/formats/pc64.html
 
 import sys
 import os
@@ -20,21 +21,63 @@ class T64File( object ):
 		self.data = ""
 
 		if data is not None:
-			assert len(data) >= 2
-			self.startaddr = unpack( "<H", data[:2] )
-			self.data = data[2:]
+			self.parse( data )
 
-	def paddedname( self ):
+	def load( self, src=None ):
+		if isinstance( src, file ):
+			data = file.read()
+		elif isinstance( src, str ):
+			if os.path.isfile( src ):
+				with open( src, "rb" ) as f:
+					data = f.read()
+			else:
+				data = src
+		else:
+			data = str( src )
+
+		if len(data)<28:
+			raise Exception( "invalid data source" )
+
+		magic, zero, filename, zero, relsize, startaddr = unpack( "<7sB16sBBH", data[:28] )
+
+		if magic != "C64File":
+			raise Exception( "data not in PC64 format" )
+
+		# unpad filename
+		while filename.endswith('\x00'):
+			filename = filename[:-1]
+
+		# TODO: determine file type from name
+		sys.stderr.write( "WARNING: defaulting to file type $82 (PRG)\n" )
+		self.filetype = 0x82
+
+		# rest must be the data
+		self.data = data[28:]
+
+	def save( self, dst=None ):
+		filename = self.paddedname( '\x00' )
+		relsize = 0
+		s = pack( "<7sB16sBBH", "C64File", 0, filename, 0, relsize, self.startaddr )
+		s += self.data
+		if isinstance( dst, file ):
+			dst.write( s )
+		elif isinstance( dst, str ):
+			with open( dst, "wb" ) as f:
+				f.write( s )
+		else:
+			return s
+
+	def paddedname( self, pad=' ' ):
 		s = self.name
 		if len( s ) > 16:
 			s = s[:16] # truncate too long name
 			sys.stderr.write( "WARNING: truncating too long file name %s\n" % repr(self.name) )
-		return s + ' ' * (16-len(s))
+		return s + pad * (16-len(s))
 
 	def direntry( self , offset ):
-		if direntrytype == 0:
+		if self.direntrytype == 0:
 			return '\x00' * 32
-		elif direntrytype == 1:
+		elif self.direntrytype == 1:
 			endaddr = self.startaddr + len(self.data)
 			direntry = pack( "<BBHHHLL", self.direntrytype, self.filetype, self.startaddr, endaddr, 0, offset, 0 )
 			direntry += self.paddedname()
@@ -59,6 +102,7 @@ class T64File( object ):
 		else:
 			ext = ".P%02d" % pos    # fallback for malformed archives
 		return self.name + ext
+
 
 class T64Image( object ):
 	"""Holds a T64 image object.
@@ -237,7 +281,8 @@ class T64Image( object ):
 		direntriesused = 0
 		for f in self.files:
 			if f is not None:
-				direntriesused += 1
+				if f.direntrytype != 0:
+					direntriesused += 1
 
 		headerdata = self.pad( self.signature, '\x00', 32 )
 		headerdata += pack( "<HHHH", self.version, direntriesmax, direntriesused, 0 )
@@ -287,6 +332,8 @@ def main():
 			t.load( opt.filename )
 		else:
 			t.load( sys.stdin )
+		if opt.repair:
+			t.cleanup()
 		t.dir( verbose=opt.verbose, pos=opt.keep_position )
 
 	##############################################################################
@@ -324,12 +371,14 @@ def main():
 
 			from IPython.terminal.embed import InteractiveShellEmbed
 			ipshell = InteractiveShellEmbed( banner1="ready.", exit_msg="bye." )
+			ipshell.confirm_exit = False
 			ipshell()
 
-			print "Do you want to save changes ([y]/n)?",
+			print "Do you want to save changes (y/[n])? ",
 			l = sys.stdin.readline()
-			if l == "y" or l == "":
+			if l.startswith( "y" ):
 				t.save( opt.filename )
+				print "saved."
 			print
 
 	##############################################################################
