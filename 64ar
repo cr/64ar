@@ -61,7 +61,7 @@ class T64File( object ):
 		src can be the name of an existing file, afile object, or a string.
 		"""		
 		if isinstance( src, file ):
-			data = file.read()
+			data = src.read()
 		elif isinstance( src, str ):
 			if os.path.isfile( src ):
 				with open( src, "rb" ) as f:
@@ -273,7 +273,7 @@ class T64Image( object ):
 		Parameter can be a file object, or a file name.
 		"""
 		if isinstance( filename, file ):
-			self.parse( sys.stdin.read() )
+			self.parse( filename.read() )
 		elif isinstance( filename, str ):
 			with open( filename, 'rb' ) as f:
 				self.parse( f.read() )
