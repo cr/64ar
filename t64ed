@@ -10,6 +10,40 @@ import sys
 import os
 from struct import pack,unpack
 
+
+class T64File( object ):
+	def __init__( self, data=None ):
+		self.direntrytype = 0
+		self.filetype = 0
+		self.startaddr = 0
+		self.name = ""
+		self.data = ""
+
+		if data is not None:
+			assert len(data) >= 2
+			self.startaddr = unpack( "<H", data[:2] )
+			self.data = data[2:]
+
+	def paddedname( self ):
+		s = self.name
+		if len( s ) > 16:
+			s = s[:16] # truncate too long name
+			sys.stderr.write( "WARNING: truncating too long file name %s\n" % repr(self.name) )
+		return s + ' ' * (16-len(s))
+
+	def direntry( self , offset ):
+		if direntrytype == 0:
+			return '\x00' * 32
+		elif direntrytype == 1:
+			endaddr = self.startaddr + len(self.data)
+			direntry = pack( "<BBHHHLL", self.direntrytype, self.filetype, self.startaddr, endaddr, 0, offset, 0 )
+			direntry += self.paddedname()
+			return direntry
+		else:
+			sys.stderr.write( "WARNING: unsupported dir entry type %i. Creating empty entry.\n" % repr(self.direntrytype) )
+			return '\x00' * 32
+
+
 class T64Image( object ):
 	"""Holds a T64 image object.
 	"""
@@ -25,7 +59,7 @@ class T64Image( object ):
 
 		self.signature = self.signatures[0]
 		self.version = 0x100
-		self.dirname = "EMPTY TAPE"
+		self.name = "EMPTY TAPE"
 		self.files = []
 
 		if rawdata is not None:
@@ -42,23 +76,25 @@ class T64Image( object ):
 		# Directory Header
 		p = 0x20
 		self.version, direntriesmax, direntriesused, unused = unpack( "<HHHH", rawdata[p:p+8] )
-		self.dirname = self.unpad( rawdata[p+8:p+32], '\x20' )
-		self.files = [None]*direntriesmax
+		self.name = self.unpad( rawdata[p+8:p+32], '\x20' )
+		dirlist = []
 		numfiles = 0
 		for i in xrange( direntriesmax ):
 			p = 0x40 + 32*i
-			dirtype, filetype, startaddr, endaddr, unused, offset, unused = unpack( "<BBHHHLL", rawdata[p:p+16] )
-			if dirtype == 0:
-				pass
-			if dirtype == 1:
+			direntrytype, filetype, startaddr, endaddr, unused, offset, unused = unpack( "<BBHHHLL", rawdata[p:p+16] )
+			if direntrytype == 0:
+				dirlist.append( None )
+			elif direntrytype == 1:
 				name = self.unpad( rawdata[p+16:p+32], '\x20' )
-				self.files[i] = { "dirtype":dirtype, "filetype":filetype, "startaddr":startaddr, "endaddr":endaddr, "name":name, "offset":offset }
+				dirlist.append( { "direntrytype":direntrytype, "filetype":filetype, "startaddr":startaddr, "endaddr":endaddr, "name":name, "offset":offset } )
 				numfiles += 1
-			if dirtype == 3:
-				sys.stderr.write( "WARNING: dir entry %i has unsupported type %i\n" % (i,dirtype) )
+			else:
+				sys.stderr.write( "ERROR: dir entry %i has unsupported type %i. ABORTING\n" % (i,direntrytype) )
+				sys.stderr.write( "Please send this .t64 file to the author of this script for analysis.")
+				sys.exit( -5 )
 
-		if len( self.files ) != direntriesmax: # should never happen
-			sys.stderr.write( "WARNING: incorrect number of dir entries in header: %i should be %i. FIXED\n" % (direntriesmax,len(self.files)) )
+		if len( dirlist ) != direntriesmax: # should never happen
+			sys.stderr.write( "WARNING: incorrect number of dir entries in header: %i should be %i. FIXED\n" % (direntriesmax,len(dirlist)) )
 		if numfiles != direntriesused:
 			sys.stderr.write( "WARNING: number of files does not match header info: %i, should be %i. FIXED\n" % (direntriesused,numfiles) )
 
@@ -67,7 +103,7 @@ class T64Image( object ):
 
 		offsets = []
 		files = {}
-		for f in self.files:
+		for f in dirlist:
 			if f is not None:
 				offsets.append( f["offset"] )
 				files[ f["offset"] ] = f
@@ -88,6 +124,19 @@ class T64Image( object ):
 				sys.stderr.write( "WARNING: wrong length %i in header, should be %i. FIXED\n" % (lengthbyaddress,lengthbyoffset) )
 				f["data"] = rawdata[offset:offset + lengthbyoffset]
 				f.pop("offset", None)
+
+		self.files = []
+		for f in dirlist:
+			if f is None:
+				self.files.append( T64File() )
+			else:
+				n = T64File()
+				n.direntrytype = f["direntrytype"]
+				n.filetype = f["filetype"]
+				n.startaddr = f["startaddr"]
+				n.name = f["name"]
+				n.data = f["data"]
+				self.files.append( n )
 
 	def __getitem__( self, i ):
 		return self.files[i]
@@ -110,7 +159,7 @@ class T64Image( object ):
 		Saves T64 image to file.
 		"""
 		if filename == "-":
-			sys.stdin.write( self.dump )
+			sys.stdout.write( self.dump )
 		else:
 			with open( filename, 'wb' ) as f: 
 				f.write( self.dump() )
@@ -130,14 +179,15 @@ class T64Image( object ):
 	def info( self ):
 		print "signature:", repr( self.signature )
 		print "version: %x" % self.version
+		print "tape name:", repr( self.name )
 		print "dir entries:", len( self.files )
-		print "name:", repr( self.dirname )
 
 	def dir( self ):
 		for i in xrange(len( self.files )):
-			if self.files[i] is not None:
-				p = self.files[i]
-				print " %2i: d:%02x t:%02x s:$%04x l:$%04x	%s" % (i, p["dirtype"], p["filetype"], p["startaddr"], p["endaddr"]-p["startaddr"], repr(p["name"]))
+			p = self.files[i]
+			if p is not None:
+				if p.direntrytype != 0:
+					print " %2i: d:%02x t:%02x s:$%04x l:$%04x	%s" % (i, p.direntrytype, p.filetype, p.startaddr, len(p.data), repr(p.name))
 
 	def cleanup( self ):
 		self.signature = self.signatures[0]
@@ -146,13 +196,9 @@ class T64Image( object ):
 		cleanfiles = []
 		for f in self.files:
 			if f is not None:
-				cleanfiles.append( f )
+				if f.direntrytype == 1:
+					cleanfiles.append( f )
 		self.files = cleanfiles
-
-		# sanitize start and and addresses
-		for f in self.files:
-			f["endaddr"] = f["startaddr"] + len(f["data"])
-
 
 	def dump( self ):
 
@@ -165,7 +211,7 @@ class T64Image( object ):
 
 		headerdata = self.pad( self.signature, '\x00', 32 )
 		headerdata += pack( "<HHHH", self.version, direntriesmax, direntriesused, 0 )
-		headerdata += self.pad( self.dirname, '\x20', 24 )
+		headerdata += self.pad( self.name, '\x20', 24 )
 
 		dirsize = 32 * len(self.files)
 		dirdata = ""
@@ -173,9 +219,8 @@ class T64Image( object ):
 		for f in self.files:
 			if f is not None:
 				offset = len(headerdata) + dirsize + len(filedata)
-				dirdata += pack( "<BBHHHLL", f["dirtype"], f["filetype"], f["startaddr"], f["endaddr"], 0, offset, 0 )
-				dirdata += self.pad( f["name"], ' ', 16 ) # pad takes care of too long names
-				filedata += f["data"]
+				dirdata = f.direntry( offset )
+				filedata += f.data
 			else:
 				dirdata += '\x00' * 32
 
@@ -208,12 +253,14 @@ def main():
 	try:
 		outfile = args[2]
 	except IndexError:
-		outfile = "-"
+		outfile = infile
 
 	if cmd == "info":
 		t = T64Image()
 		if infile:
 			t.load( infile )
+			if opt.cleanup:
+				t.cleanup()
 			t.info()
 			t.dir()
 
@@ -227,6 +274,8 @@ def main():
 		t = T64Image()
 		if infile:
 			t.load( infile )
+			if opt.cleanup:
+				t.cleanup()
 			t.info()
 			t.dir()
 
